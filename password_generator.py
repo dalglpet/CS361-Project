@@ -237,7 +237,7 @@ def run_generate_screen(length, types_set, use_lower, use_upper, use_digit, use_
         print(pwd)
         print("1) Generate new password")
         print("2) Return to menu")
-        print("4) Exit program")
+        print("3) Exit program")
         choice = input("\nEnter choice: ").strip()
 
         # Choice 1: continue the loop and show another password.
@@ -247,7 +247,7 @@ def run_generate_screen(length, types_set, use_lower, use_upper, use_digit, use_
             continue
         if choice == "2":
             return
-        if choice == "4":
+        if choice == "3":
             exit_program()
 
 
