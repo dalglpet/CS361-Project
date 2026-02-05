@@ -155,7 +155,7 @@ def do_character_types(use_lower, use_upper, use_digit, use_symbol):
         print()
         print("Set Character Types")
         print("Note: Some sites reject certain symbols, but adding them can significantly increase password strength.")
-        print("Choose which character types to include:")
+        print("Choose which character types to include:\n")
         # Each type is shown as [ON] or [OFF]. Set the label from the current flag
         # (e.g. lower_label is "ON" when use_lower is True).
         if use_lower:
@@ -178,7 +178,7 @@ def do_character_types(use_lower, use_upper, use_digit, use_symbol):
         print("Uppercase letters (A-Z): [" + upper_label + "]")
         print("Numbers (0-9): [" + digit_label + "]")
         print("Symbols (!@#$...): [" + symbol_label + "]")
-        print("1) Toggle lowercase")
+        print("\n1) Toggle lowercase")
         print("2) Toggle uppercase")
         print("3) Toggle numbers")
         print("4) Toggle symbols")
