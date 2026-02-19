@@ -1,4 +1,7 @@
 # Password Generator - A terminal application for generating secure, random passwords with custom settings.
+# Includes:
+# - Login microservice call (port 5001)
+# - Export microservice call (port 5002) to write saved passwords to a CSV file
 
 import random
 import string
@@ -69,6 +72,89 @@ def run_login_screen():
             print("\nLogin service error. Make sure the login microservice is running.\n")
 
 
+# save_generated_password: Saves a generated password and its settings in a list for exporting later.
+# Prerequisites: saved_passwords is a list.
+# Arguments: saved_passwords (list of dict), password (str), length (int),
+#            use_lower/use_upper/use_digit/use_symbol (bool).
+# Returns: None.
+def save_generated_password(saved_passwords, password, length, use_lower, use_upper, use_digit, use_symbol):
+    # Store one record as a dictionary so the export microservice can make CSV columns from the keys.
+    record = {
+        "password": password,
+        "length": length,
+        "lowercase": use_lower,
+        "uppercase": use_upper,
+        "numbers": use_digit,
+        "symbols": use_symbol
+    }
+    saved_passwords.append(record)
+
+
+# export_saved_passwords: Sends saved records to the export microservice and returns its response.
+# Prerequisites: export microservice is running on EXPORT_URL.
+# Arguments: saved_passwords (list of dict), filename (str).
+# Returns: dict response JSON on success, or None if the service cannot be reached.
+def export_saved_passwords(saved_passwords, filename):
+    EXPORT_URL = "http://127.0.0.1:5002/export"
+
+    # Build the JSON payload exactly how the export microservice expects it.
+    payload = {"filename": filename, "data": saved_passwords}
+
+    # Try to send the POST request to the export microservice.
+    # If the service is not running, this will throw an exception.
+    try:
+        resp = requests.post(EXPORT_URL, json=payload, timeout=5)
+    except:
+        return None
+
+    # Try to parse JSON response.
+    # If it is not JSON for some reason, treat it as a service error.
+    try:
+        return resp.json()
+    except:
+        return None
+
+
+# run_export_screen: Prompts the user for a filename and exports saved passwords using the microservice.
+# Prerequisites: saved_passwords is a list.
+# Arguments: saved_passwords (list of dict).
+# Returns: None.
+def run_export_screen(saved_passwords):
+    print()
+    print("Export Saved Passwords")
+
+    # If there is nothing saved, do not call the microservice.
+    if len(saved_passwords) == 0:
+        print("There are no saved passwords to export yet.")
+        input("\nPress Enter to return to menu: ")
+        return
+
+    # Ask the user what to name the CSV file.
+    # Pressing Enter uses a default name.
+    filename = input("Enter filename (example: passwords.csv) or press Enter for default: ").strip()
+    if filename == "":
+        filename = "passwords.csv"
+
+    # Call the export microservice.
+    result = export_saved_passwords(saved_passwords, filename)
+
+    # If the service could not be reached, show an error.
+    if result is None:
+        print("\nExport service error. Make sure the export microservice is running.\n")
+        input("Press Enter to return to menu: ")
+        return
+
+    # If status is ok, show where the file was saved.
+    if result.get("status") == "ok":
+        print("\nExport complete.")
+        print("Saved file path:", result.get("path"))
+    else:
+        # Otherwise show the error message from the microservice.
+        print("\nExport failed:", result.get("error_message", "Unknown error."))
+
+    input("\nPress Enter to return to menu: ")
+
+
 # show_welcome: Displays the welcome message and waits for the user to press Enter before continuing.
 # Prerequisites: None.
 # Arguments: None.
@@ -101,10 +187,10 @@ def format_settings_line(length, types_set):
     "\n" + "MUST SET LENGTH AND CHARACTER TYPES FIRST!" + "\n"
 
 
-# run_main_menu: Shows the main menu and returns the user's choice (1-4).
+# run_main_menu: Shows the main menu and returns the user's choice.
 # Prerequisites: length and types_set reflect current settings.
 # Arguments: length (int or None), types_set (bool).
-# Returns: str, one of "1", "2", "3", "4".
+# Returns: str, one of "1", "2", "3", "4", "5".
 def run_main_menu(length, types_set):
     print()
     print(format_settings_line(length, types_set))
@@ -112,7 +198,8 @@ def run_main_menu(length, types_set):
     print("1) Generate password")
     print("2) Edit password settings")
     print("3) I need help!")
-    print("4) Exit program")
+    print("4) Export saved passwords to CSV")
+    print("5) Exit program")
     choice = input("\nEnter choice: ").strip()
     return choice
 
@@ -288,11 +375,11 @@ def generate_password(length, use_lower, use_upper, use_digit, use_symbol):
 
 # run_generate_screen: Shows the Generate Password / Show Result screen until user returns to menu or exits.
 # Prerequisites: length and types_set are set; at least one character type is on.
-# Arguments: length, types_set, and the four use_* flags.
+# Arguments: length, types_set, the four use_* flags, and saved_passwords list.
 # Returns: None (returns to main menu via loop in main).
-def run_generate_screen(length, types_set, use_lower, use_upper, use_digit, use_symbol):
+def run_generate_screen(length, types_set, use_lower, use_upper, use_digit, use_symbol, saved_passwords):
     # Each time through the loop: one password and the three options are shown.
-    # Exit only when 2 (return to main menu) or 4 (exit program) is chosen.
+    # Exit only when 2 (return to main menu) or 3 (exit program) is chosen.
     # Option 1 means loop again and show another password.
     while True:
         print()
@@ -300,6 +387,10 @@ def run_generate_screen(length, types_set, use_lower, use_upper, use_digit, use_
         print("Generated password:")
         pwd = generate_password(length, use_lower, use_upper, use_digit, use_symbol)
         print(pwd)
+
+        # Save this password to the list so the user can export later.
+        save_generated_password(saved_passwords, pwd, length, use_lower, use_upper, use_digit, use_symbol)
+
         print("1) Generate new password")
         print("2) Return to menu")
         print("3) Exit program")
@@ -307,7 +398,7 @@ def run_generate_screen(length, types_set, use_lower, use_upper, use_digit, use_
 
         # Choice 1: continue the loop and show another password.
         # Choice 2: return so control goes back to main and the main menu appears.
-        # Choice 4: exit the program.
+        # Choice 3: exit the program.
         if choice == "1":
             continue
         if choice == "2":
@@ -406,7 +497,8 @@ def exit_program():
     raise SystemExit(0)
 
 
-# main: Entry point; shows the welcome once, then runs the main menu loop (generate, settings, help, exit). Keeps track of length, types_set, and the four character-type flags.
+# main: Entry point; shows the welcome once, then runs the main menu loop (generate, settings, help, export, exit).
+# Keeps track of length, types_set, the four character-type flags, and saved passwords for exporting.
 # Prerequisites: None.
 # Arguments: None.
 # Returns: None (runs until exit).
@@ -419,6 +511,9 @@ def main():
     if not logged_in:
         exit_program()
 
+    # saved_passwords stores every generated password record so the user can export later.
+    saved_passwords = []
+
     # length is None and types_set is False so the status line shows "not set"
     # until the settings menu is used. The four flags default to lower/upper/digits on
     # and symbols off so the first generation uses letters and numbers unless changed.
@@ -430,21 +525,23 @@ def main():
     use_symbol = False
 
     # Show the main menu, get the choice, then branch.
-    # The loop runs until option 4 is chosen and exit_program() is called.
+    # The loop runs until option 5 is chosen and exit_program() is called.
     while True:
         choice = run_main_menu(length, types_set)
 
         # Choice 1: generate password only when length and types are set;
         # otherwise show the "set length and character types first" message.
         # Choice 2: open settings and update length, types_set, and the four flags.
-        # Choice 3: show help menu. Choice 4: exit.
+        # Choice 3: show help menu.
+        # Choice 4: export saved passwords to a CSV file using the export microservice.
+        # Choice 5: exit.
         if choice == "1":
             # Generate was chosen but nothing is set yet: show the reminder and wait for Enter.
             # Otherwise run the generate screen with the current settings.
             if length is None or not types_set:
                 show_settings_required_message()
             else:
-                run_generate_screen(length, types_set, use_lower, use_upper, use_digit, use_symbol)
+                run_generate_screen(length, types_set, use_lower, use_upper, use_digit, use_symbol, saved_passwords)
         elif choice == "2":
             length, types_set, use_lower, use_upper, use_digit, use_symbol = run_settings(
                 length, types_set, use_lower, use_upper, use_digit, use_symbol
@@ -452,6 +549,8 @@ def main():
         elif choice == "3":
             run_help_menu()
         elif choice == "4":
+            run_export_screen(saved_passwords)
+        elif choice == "5":
             exit_program()
 
 
