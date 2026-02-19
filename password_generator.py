@@ -2,6 +2,71 @@
 
 import random
 import string
+import requests
+
+
+# attempt_login: Sends username/password to the login microservice and returns the status string.
+# Prerequisites: login microservice is running on LOGIN_URL.
+# Arguments: username (str), password (str).
+# Returns: str, one of "ok", "locked", "invalid_format", "invalid_credentials", or "service_error".
+def attempt_login(username, password):
+    LOGIN_URL = "http://127.0.0.1:5001/login"
+
+    # Build the JSON payload exactly how the microservice expects it.
+    payload = {"username": username, "password": password}
+
+    # Try to send the POST request to the microservice.
+    # If the service is not running, this will throw an exception.
+    try:
+        resp = requests.post(LOGIN_URL, json=payload, timeout=3)
+    except:
+        return "service_error"
+
+    # Try to parse JSON response.
+    # If it is not JSON for some reason, treat it as a service error.
+    try:
+        data = resp.json()
+    except:
+        return "service_error"
+
+    # Return the status field from the microservice response.
+    return data.get("status", "service_error")
+
+
+# run_login_screen: Prompts the user to log in until success or they quit.
+# Prerequisites: None.
+# Arguments: None.
+# Returns: bool, True if user logged in; False if user chose to quit.
+def run_login_screen():
+    while True:
+        print()
+        print("Login Required")
+        print("Enter your username and password to continue.")
+        print("Press Enter on username to quit.\n")
+
+        username = input("Username: ").strip()
+
+        # Blank username means quit.
+        if username == "":
+            return False
+
+        password = input("Password: ").strip()
+
+        # Call the microservice to validate credentials.
+        status = attempt_login(username, password)
+
+        # Handle the possible responses.
+        if status == "ok":
+            print("\nLogin successful.\n")
+            return True
+        elif status == "locked":
+            print("\nAccount locked. Wait a bit and try again.\n")
+        elif status == "invalid_credentials":
+            print("\nInvalid username or password.\n")
+        elif status == "invalid_format":
+            print("\nInvalid input format.\n")
+        else:
+            print("\nLogin service error. Make sure the login microservice is running.\n")
 
 
 # show_welcome: Displays the welcome message and waits for the user to press Enter before continuing.
@@ -347,6 +412,12 @@ def exit_program():
 # Returns: None (runs until exit).
 def main():
     show_welcome()
+
+    # Require login before using the app.
+    # If the user quits at login, exit the program.
+    logged_in = run_login_screen()
+    if not logged_in:
+        exit_program()
 
     # length is None and types_set is False so the status line shows "not set"
     # until the settings menu is used. The four flags default to lower/upper/digits on
