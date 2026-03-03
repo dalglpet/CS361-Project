@@ -1,7 +1,8 @@
 # Password Generator - A terminal application for generating secure, random passwords with custom settings.
 # Includes:
-# - Login microservice call (port 5001)
-# - Export microservice call (port 5002) to write saved passwords to a CSV file
+# - Login microservice
+# - Export microservice
+# - Session token microservice
 
 import random
 import string
@@ -13,7 +14,7 @@ import requests
 # Arguments: username (str), password (str).
 # Returns: str, one of "ok", "locked", "invalid_format", "invalid_credentials", or "service_error".
 def attempt_login(username, password):
-    LOGIN_URL = "http://127.0.0.1:5001/login"
+    LOGIN_URL = "http://127.0.0.1:5000/login"
 
     # Build the JSON payload exactly how the microservice expects it.
     payload = {"username": username, "password": password}
@@ -36,6 +37,80 @@ def attempt_login(username, password):
     return data.get("status", "service_error")
 
 
+# attempt_create_account: Sends username/password to the login microservice's create-account endpoint.
+# Prerequisites: login microservice is running on localhost:5001.
+# Arguments: username (str), password (str).
+# Returns: str, one of "created", "user_exists", "invalid_format", or "service_error".
+def attempt_create_account(username, password):
+    CREATE_URL = "http://127.0.0.1:5000/create-account"
+    payload = {"username": username, "password": password}
+    try:
+        resp = requests.post(CREATE_URL, json=payload, timeout=3)
+    except:
+        return "service_error"
+    try:
+        data = resp.json()
+    except:
+        return "service_error"
+    return data.get("status", "service_error")
+
+
+# create_session_token: Asks the session token microservice to issue a new token after a successful login.
+# Prerequisites: session token microservice is running on SESSION_URL.
+# Arguments: None.
+# Returns: str token on success, or None if the service cannot be reached.
+def create_session_token():
+    SESSION_URL = "http://127.0.0.1:5003/create"
+
+    # Try to send the POST request to the session token microservice.
+    # If the service is not running, this will throw an exception.
+    try:
+        resp = requests.post(SESSION_URL, timeout=3)
+    except:
+        return None
+
+    # Try to parse JSON response.
+    # If it is not JSON for some reason, treat it as a service error.
+    try:
+        data = resp.json()
+    except:
+        return None
+
+    # If the microservice returned status "ok", pull the token string out of the response.
+    # Otherwise return None so the caller knows it did not work.
+    if data.get("status") == "ok":
+        return data.get("token")
+    return None
+
+
+# validate_session_token: Sends a token to the session token microservice and returns whether it is still valid.
+# Prerequisites: session token microservice is running on SESSION_URL.
+# Arguments: token (str).
+# Returns: str, one of "ok", "expired", "invalid", or "service_error".
+def validate_session_token(token):
+    SESSION_URL = "http://127.0.0.1:5003/validate"
+
+    # Build the JSON payload exactly how the microservice expects it.
+    payload = {"token": token}
+
+    # Try to send the POST request to the session token microservice.
+    # If the service is not running, this will throw an exception.
+    try:
+        resp = requests.post(SESSION_URL, json=payload, timeout=3)
+    except:
+        return "service_error"
+
+    # Try to parse JSON response.
+    # If it is not JSON for some reason, treat it as a service error.
+    try:
+        data = resp.json()
+    except:
+        return "service_error"
+
+    # Return the status field from the microservice response.
+    return data.get("status", "service_error")
+
+
 # run_login_screen: Prompts the user to log in until success or they quit.
 # Prerequisites: None.
 # Arguments: None.
@@ -44,21 +119,43 @@ def run_login_screen():
     while True:
         print()
         print("Login Required")
-        print("Enter your username and password to continue.")
-        print("Press Enter on username to quit.\n")
+        print("1) Log in")
+        print("2) Create account")
+        print("3) Quit")
+        choice = input("\nEnter choice: ").strip()
 
-        username = input("Username: ").strip()
-
-        # Blank username means quit.
-        if username == "":
+        if choice == "3":
             return False
 
+        if choice == "2":
+            print()
+            print("Create Account")
+            username = input("Username: ").strip()
+            if username == "":
+                continue
+            password = input("Password: ").strip()
+            status = attempt_create_account(username, password)
+            if status == "created":
+                print("\nAccount created. You can now log in.\n")
+            elif status == "user_exists":
+                print("\nUsername already taken.\n")
+            elif status == "invalid_format":
+                print("\nInvalid input format. Username must be 3-32 chars, password 1-72 chars.\n")
+            else:
+                print("\nLogin service error. Make sure the login microservice is running.\n")
+            continue
+
+        if choice != "1":
+            continue
+
+        print()
+        username = input("Username: ").strip()
+        if username == "":
+            continue
         password = input("Password: ").strip()
 
-        # Call the microservice to validate credentials.
         status = attempt_login(username, password)
 
-        # Handle the possible responses.
         if status == "ok":
             print("\nLogin successful.\n")
             return True
@@ -419,12 +516,20 @@ def show_settings_required_message():
 
 # run_help_menu: Displays the help menu and runs the selected item (quickstart, length help, character types help) or return to menu or exit.
 # Prerequisites: None.
-# Arguments: None.
-# Returns: None.
-def run_help_menu():
+# Arguments: session_token (str).
+# Returns: str or None. Returns "session_expired" if the session expired while in the help menu; None on normal return.
+def run_help_menu(session_token):
     # Loop until 4 (return to main menu) or 5 (exit) is chosen.
     # After viewing a help screen, this menu is shown again.
     while True:
+        # Validate session at the start of each help menu iteration so the user is logged out if expired.
+        token_status = validate_session_token(session_token)
+        if token_status == "expired":
+            return "session_expired"
+        if token_status != "ok":
+            print("\nSession token service error. Make sure the session token microservice is running.\n")
+            exit_program()
+
         print()
         print("Help Menu")
         print("1) Quickstart guide")
@@ -511,6 +616,13 @@ def main():
     if not logged_in:
         exit_program()
 
+    # After a successful login, request a session token from the session token microservice.
+    # The token will be validated before every menu action so the session cannot last forever.
+    session_token = create_session_token()
+    if session_token is None:
+        print("\nSession token service error. Make sure the session token microservice is running.\n")
+        exit_program()
+
     # saved_passwords stores every generated password record so the user can export later.
     saved_passwords = []
 
@@ -528,6 +640,27 @@ def main():
     # The loop runs until option 5 is chosen and exit_program() is called.
     while True:
         choice = run_main_menu(length, types_set)
+
+        # Before doing anything, validate the session token.
+        # If it has expired or is invalid, force the user to log in again.
+        token_status = validate_session_token(session_token)
+
+        if token_status == "expired":
+            print("\nYour session has expired. Please log in again.\n")
+            logged_in = run_login_screen()
+            if not logged_in:
+                exit_program()
+            # After re-login, get a fresh session token.
+            session_token = create_session_token()
+            if session_token is None:
+                print("\nSession token service error. Make sure the session token microservice is running.\n")
+                exit_program()
+            # Go back to the top of the loop so the user can pick again.
+            continue
+
+        if token_status != "ok":
+            print("\nSession token service error. Make sure the session token microservice is running.\n")
+            exit_program()
 
         # Choice 1: generate password only when length and types are set;
         # otherwise show the "set length and character types first" message.
@@ -547,7 +680,17 @@ def main():
                 length, types_set, use_lower, use_upper, use_digit, use_symbol
             )
         elif choice == "3":
-            run_help_menu()
+            help_result = run_help_menu(session_token)
+            if help_result == "session_expired":
+                print("\nYour session has expired. Please log in again.\n")
+                logged_in = run_login_screen()
+                if not logged_in:
+                    exit_program()
+                session_token = create_session_token()
+                if session_token is None:
+                    print("\nSession token service error. Make sure the session token microservice is running.\n")
+                    exit_program()
+                continue
         elif choice == "4":
             run_export_screen(saved_passwords)
         elif choice == "5":
