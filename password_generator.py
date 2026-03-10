@@ -3,14 +3,18 @@
 # - Login microservice
 # - Export microservice
 # - Session token microservice
+# - Data backup microservice
+# - Searching microservice
 
+import json
+import os
 import random
 import string
 import requests
 
 
 # attempt_login: Sends username/password to the login microservice and returns the status string.
-# Prerequisites: login microservice is running on LOGIN_URL.
+# Prerequisites: login microservice is running on LOGIN_xURL.
 # Arguments: username (str), password (str).
 # Returns: str, one of "ok", "locked", "invalid_format", "invalid_credentials", or "service_error".
 def attempt_login(username, password):
@@ -175,15 +179,14 @@ def run_login_screen():
 #            use_lower/use_upper/use_digit/use_symbol (bool).
 # Returns: None.
 def save_generated_password(saved_passwords, password, length, use_lower, use_upper, use_digit, use_symbol):
-    # Store one record as a dictionary so the export microservice can make CSV columns from the keys.
-    record = {
-        "password": password,
-        "length": length,
-        "lowercase": use_lower,
-        "uppercase": use_upper,
-        "numbers": use_digit,
-        "symbols": use_symbol
-    }
+    # Store one record as a dictionary with password first for readability.
+    record = {}
+    record["password"] = password
+    record["length"] = length
+    record["lowercase"] = use_lower
+    record["uppercase"] = use_upper
+    record["numbers"] = use_digit
+    record["symbols"] = use_symbol
     saved_passwords.append(record)
 
 
@@ -201,6 +204,131 @@ def export_saved_passwords(saved_passwords, filename):
     # If the service is not running, this will throw an exception.
     try:
         resp = requests.post(EXPORT_URL, json=payload, timeout=5)
+    except:
+        return None
+
+    # Try to parse JSON response.
+    # If it is not JSON for some reason, treat it as a service error.
+    try:
+        return resp.json()
+    except:
+        return None
+
+
+# create_password_backup: Sends saved passwords to the data backup microservice to create a backup.
+# Prerequisites: data backup microservice is running on BACKUP_URL.
+# Arguments: saved_passwords (list of dict), user_id (str), list_name (str).
+# Returns: dict response JSON on success, or None if the service cannot be reached.
+def create_password_backup(saved_passwords, user_id, list_name):
+    BACKUP_URL = "http://127.0.0.1:8080/backup/create"
+
+    # Build the JSON payload exactly how the backup microservice expects it.
+    # Wrap the passwords with the list name so the backup file shows which list this is.
+    headers = {"Content-Type": "application/json", "X-API-Key": "dev-secret-key"}
+    backup_data = {
+        "list_name": list_name,
+        "passwords": saved_passwords
+    }
+    payload = {
+        "user_id": user_id,
+        "source_app": "PasswordGenerator",
+        "data": backup_data
+    }
+
+    # Try to send the POST request to the backup microservice.
+    # If the service is not running, this will throw an exception.
+    try:
+        resp = requests.post(BACKUP_URL, headers=headers, json=payload, timeout=5)
+    except:
+        return None
+
+    # Try to parse JSON response.
+    # If it is not JSON for some reason, treat it as a service error.
+    try:
+        return resp.json()
+    except:
+        return None
+
+
+# restore_password_backup: Restores a specific backup by ID from the data backup microservice.
+# Prerequisites: data backup microservice is running on BACKUP_URL.
+# Arguments: user_id (str), backup_id (str).
+# Returns: dict response JSON on success, or None if the service cannot be reached.
+def restore_password_backup(user_id, backup_id):
+    BACKUP_URL = "http://127.0.0.1:8080/backup/restore"
+
+    # Build the JSON payload exactly how the backup microservice expects it.
+    headers = {"Content-Type": "application/json", "X-API-Key": "dev-secret-key"}
+    payload = {
+        "user_id": user_id,
+        "backup_id": backup_id
+    }
+
+    # Try to send the POST request to the backup microservice.
+    # If the service is not running, this will throw an exception.
+    try:
+        resp = requests.post(BACKUP_URL, headers=headers, json=payload, timeout=5)
+    except:
+        return None
+
+    # Try to parse JSON response.
+    # If it is not JSON for some reason, treat it as a service error.
+    try:
+        return resp.json()
+    except:
+        return None
+
+
+# INDEX_FILE_PATH is the full path to the local JSON file that maps list names to backup IDs.
+# It is stored next to this script so it persists across sessions.
+INDEX_FILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "password_lists_index.json")
+
+
+# save_backup_index: Saves a list name and its backup ID to the local index file.
+# Prerequisites: None.
+# Arguments: list_name (str), backup_id (str).
+# Returns: None.
+def save_backup_index(list_name, backup_id):
+    # Try to load the existing index from the JSON file.
+    # If the file does not exist or is not valid JSON, start with an empty dict.
+    index = {}
+    try:
+        file = open(INDEX_FILE_PATH, "r")
+        index = json.load(file)
+        file.close()
+    except:
+        index = {}
+
+    # Add or update the entry for this list name.
+    index[list_name] = backup_id
+
+    # Write the updated index back to the file.
+    file = open(INDEX_FILE_PATH, "w")
+    file.write(json.dumps(index, indent=2))
+    file.close()
+
+
+# search_for_list: Uses the searching microservice to look up a list name in the local index file.
+# Prerequisites: searching microservice is running on SEARCH_URL.
+# Arguments: list_name (str).
+# Returns: dict response JSON on success (e.g. {"MyList": "backup-id-here"}), or None if the service
+#          cannot be reached or the index file does not exist.
+def search_for_list(list_name):
+    SEARCH_URL = "http://127.0.0.1:8001/search"
+
+    # Build the JSON payload for a file lookup search.
+    # The searching microservice will open the index file and look up the list name as a JSON key.
+    payload = {
+        "data_source": INDEX_FILE_PATH,
+        "query": list_name,
+        "file_lookup": True,
+        "strict": False
+    }
+
+    # Try to send the POST request to the searching microservice.
+    # If the service is not running, this will throw an exception.
+    try:
+        resp = requests.post(SEARCH_URL, json=payload, timeout=5)
     except:
         return None
 
@@ -252,6 +380,273 @@ def run_export_screen(saved_passwords):
     input("\nPress Enter to return to menu: ")
 
 
+# run_name_list_screen: Prompts the user to name a new password list and returns the name.
+# Prerequisites: all_lists is a dict of existing lists (used to check for duplicate names).
+# Arguments: all_lists (dict).
+# Returns: str, the list name the user chose.
+def run_name_list_screen(all_lists):
+    # Loop until the user provides a valid, non-empty, non-duplicate name.
+    while True:
+        print()
+        print("Name Your Password List")
+        print("Each list has a unique name so you can manage and back up lists separately.")
+        print("Example names: WorkPasswords, PersonalAccounts, SchoolLogins")
+        name = input("\nEnter a name for your new list: ").strip()
+
+        # Empty names are not allowed.
+        if name == "":
+            print("\nList name cannot be empty. Please try again.")
+            continue
+
+        # Check if this name is already in use in the current session.
+        if name in all_lists:
+            print("\nA list named '" + name + "' already exists in this session. Please choose a different name.")
+            continue
+
+        return name
+
+
+# run_password_lists_screen: Shows the Password Lists submenu and lets the user view, create/switch, backup/export, or restore lists.
+# Prerequisites: all_lists is a dict mapping list names to lists of password dicts; current_list_name is the active list; user_id is a string.
+# Arguments: all_lists (dict), current_list_name (str), user_id (str), length (int or None),
+#            types_set (bool), use_lower, use_upper, use_digit, use_symbol (bool).
+# Returns: tuple (current_list_name, length, types_set, use_lower, use_upper, use_digit, use_symbol).
+def run_password_lists_screen(all_lists, current_list_name, user_id, length, types_set, use_lower, use_upper, use_digit, use_symbol):
+    # Loop until "Return to menu" (5) is chosen.
+    # Options 1-4 perform an action and the menu is shown again.
+    while True:
+        print()
+        print("Password Lists")
+        if current_list_name == "" or current_list_name not in all_lists:
+            print("Current list: [none]")
+        else:
+            current_passwords = all_lists[current_list_name]
+            print("Current list: [" + current_list_name + "] (" + str(len(current_passwords)) + " passwords)")
+        print("\n1) View passwords in current list")
+        print("2) Create or switch list")
+        print("3) Backup or export current list")
+        print("4) Find & restore a list")
+        print("5) Return to menu")
+        choice = input("\nEnter choice: ").strip()
+
+        # Choice 1: display every password saved in the current list.
+        if choice == "1":
+            print()
+            if current_list_name == "" or current_list_name not in all_lists:
+                print("You have no active list. Use 'Generate passwords' from the main menu to create one first.")
+                input("\nPress Enter to continue: ")
+                continue
+            current_passwords = all_lists[current_list_name]
+            if len(current_passwords) == 0:
+                print("Your list '" + current_list_name + "' has no passwords yet.")
+                print("Use 'Generate passwords' from the main menu to add some.")
+                input("\nPress Enter to continue: ")
+                continue
+            print("All passwords in '" + current_list_name + "' (" + str(len(current_passwords)) + " total):\n")
+            for i in range(len(current_passwords)):
+                record = current_passwords[i]
+                print("  " + str(i + 1) + ") " + record["password"])
+            input("\nPress Enter to continue: ")
+
+        # Choice 2: create a new list or switch to an existing one.
+        elif choice == "2":
+            print()
+            print("Create or Switch List")
+
+            # Get all list names as a simple list so we can show them numbered.
+            list_names = []
+            for name in all_lists:
+                list_names.append(name)
+
+            # Show existing lists if there are any.
+            if len(list_names) > 0:
+                print("Your lists:\n")
+                for i in range(len(list_names)):
+                    name = list_names[i]
+                    count = len(all_lists[name])
+                    marker = ""
+                    if name == current_list_name:
+                        marker = " (current)"
+                    print("  " + str(i + 1) + ") " + name + " (" + str(count) + " passwords)" + marker)
+                print()
+
+            print("Enter a number to switch, or type 'new' to create a new list.")
+            raw = input("Choice (or press Enter to cancel): ").strip()
+
+            if raw == "":
+                continue
+
+            if raw.lower() == "new":
+                new_name = run_name_list_screen(all_lists)
+                all_lists[new_name] = []
+                current_list_name = new_name
+                length = None
+                types_set = False
+                use_lower = True
+                use_upper = True
+                use_digit = True
+                use_symbol = True
+                print("\nCreated new list '" + new_name + "' and switched to it.")
+                print("You'll set password settings when you generate passwords for this list.")
+                input("\nPress Enter to continue: ")
+                continue
+
+            # Validate the input is a number within range.
+            is_number = True
+            for c in raw:
+                if c not in "0123456789":
+                    is_number = False
+                    break
+            if not is_number:
+                continue
+
+            pick = int(raw)
+            if pick < 1 or pick > len(list_names):
+                continue
+
+            current_list_name = list_names[pick - 1]
+            switched_passwords = all_lists[current_list_name]
+            if len(switched_passwords) > 0:
+                first = switched_passwords[0]
+                length = first.get("length", length)
+                use_lower = first.get("lowercase", use_lower)
+                use_upper = first.get("uppercase", use_upper)
+                use_digit = first.get("numbers", use_digit)
+                use_symbol = first.get("symbols", use_symbol)
+                types_set = True
+            else:
+                length = None
+                types_set = False
+                use_lower = True
+                use_upper = True
+                use_digit = True
+                use_symbol = True
+            print("\nSwitched to list '" + current_list_name + "'.")
+            input("\nPress Enter to continue: ")
+
+        # Choice 3: backup to the cloud or export to CSV.
+        elif choice == "3":
+            print()
+            if current_list_name == "" or current_list_name not in all_lists:
+                print("You have no active list. Use 'Generate passwords' from the main menu to create one first.")
+                input("\nPress Enter to continue: ")
+                continue
+            current_passwords = all_lists[current_list_name]
+            if len(current_passwords) == 0:
+                print("Your list '" + current_list_name + "' has no passwords yet.")
+                print("Generate some passwords first, then come back here.")
+                input("\nPress Enter to continue: ")
+                continue
+
+            print("Save list '" + current_list_name + "' (" + str(len(current_passwords)) + " passwords)")
+            print("\n1) Backup to cloud (can be restored later by name)")
+            print("2) Export to CSV file")
+            print("3) Cancel")
+            save_choice = input("\nEnter choice: ").strip()
+
+            if save_choice == "1":
+                print("\nBacking up list '" + current_list_name + "'...")
+                result = create_password_backup(current_passwords, user_id, current_list_name)
+
+                if result is None:
+                    print("\nBackup service error. Make sure the data backup microservice is running.")
+                    input("\nPress Enter to continue: ")
+                    continue
+
+                if result.get("status") == "success":
+                    backup_info = result.get("backup", {})
+                    backup_id = backup_info.get("backup_id", "")
+                    save_backup_index(current_list_name, backup_id)
+                    print("\nBackup created successfully!")
+                    print("List name: " + current_list_name)
+                    print("Backup ID: " + backup_id)
+                    print("\nYou can restore this list later by searching for '" + current_list_name + "'.")
+                else:
+                    print("\nBackup failed: " + result.get("error", "Unknown error."))
+
+                input("\nPress Enter to continue: ")
+
+            elif save_choice == "2":
+                run_export_screen(current_passwords)
+
+        # Choice 4: find a previously backed-up list by name using the search microservice, then restore it.
+        elif choice == "4":
+            print()
+            print("Find & Restore a List")
+            print("Type the exact name of a password list that was previously backed up.")
+            list_name = input("\nEnter list name (or press Enter to cancel): ").strip()
+
+            if list_name == "":
+                continue
+
+            # Check if the index file exists before trying to search.
+            if not os.path.exists(INDEX_FILE_PATH):
+                print("\nNo backup found with the name '" + list_name + "'.")
+                input("\nPress Enter to continue: ")
+                continue
+
+            # Use the search microservice to look up the backup ID for this list name.
+            print("\nSearching for '" + list_name + "'...")
+            result = search_for_list(list_name)
+
+            if result is None:
+                print("\nSearch service error. Make sure the searching microservice is running.")
+                input("\nPress Enter to continue: ")
+                continue
+
+            # The search microservice returns {list_name: backup_id} on success, or {list_name: null} if not found.
+            backup_id = result.get(list_name)
+
+            if backup_id is None:
+                print("\nNo backup found with the name '" + list_name + "'.")
+                input("\nPress Enter to continue: ")
+                continue
+
+            print("Found it! Restoring list '" + list_name + "'...")
+            restore_result = restore_password_backup(user_id, backup_id)
+
+            if restore_result is None:
+                print("\nBackup service error. Make sure the data backup microservice is running.")
+                input("\nPress Enter to continue: ")
+                continue
+
+            if restore_result.get("status") == "success":
+                restored_data = restore_result.get("data", {})
+                # The backup data is wrapped in a dict with "list_name" and "passwords" keys.
+                # Pull the passwords list out of the wrapper.
+                if "passwords" in restored_data:
+                    password_list = restored_data["passwords"]
+                else:
+                    password_list = restored_data
+                all_lists[list_name] = password_list
+                current_list_name = list_name
+
+                # Restore the settings from the first password record so the user
+                # can keep generating with the same settings that were backed up.
+                if len(password_list) > 0:
+                    first = password_list[0]
+                    length = first.get("length", length)
+                    use_lower = first.get("lowercase", use_lower)
+                    use_upper = first.get("uppercase", use_upper)
+                    use_digit = first.get("numbers", use_digit)
+                    use_symbol = first.get("symbols", use_symbol)
+                    types_set = True
+
+                print("\nRestore successful! Loaded " + str(len(password_list)) + " password(s) into list '" + list_name + "'.")
+                print("Backup ID: " + backup_id)
+                if length is not None:
+                    print("Settings restored: length=" + str(length) + ", lowercase=" + str(use_lower) + ", uppercase=" + str(use_upper) + ", numbers=" + str(use_digit) + ", symbols=" + str(use_symbol))
+                print("Switched to list '" + list_name + "'.")
+            else:
+                print("\nRestore failed: " + restore_result.get("error", "Unknown error."))
+
+            input("\nPress Enter to continue: ")
+
+        # Choice 5: return to the main menu.
+        elif choice == "5":
+            return current_list_name, length, types_set, use_lower, use_upper, use_digit, use_symbol
+
+
 # show_welcome: Displays the welcome message and waits for the user to press Enter before continuing.
 # Prerequisites: None.
 # Arguments: None.
@@ -264,10 +659,17 @@ def show_welcome():
 
 
 # format_settings_line: Builds the status line shown at the top of most screens.
-# Prerequisites: length is either None (not set) or an integer; types_set is a boolean.
-# Arguments: length (int or None), types_set (bool).
+# Prerequisites: length is either None (not set) or an integer; types_set is a boolean;
+#                current_list_name is a string; all_lists is a dict.
+# Arguments: length (int or None), types_set (bool), current_list_name (str), all_lists (dict).
 # Returns: str, the formatted line.
-def format_settings_line(length, types_set):
+def format_settings_line(length, types_set, current_list_name="", all_lists=None):
+    # Build the current list part of the status line.
+    if current_list_name != "" and all_lists is not None:
+        count = len(all_lists[current_list_name])
+        list_str = "Current list: [" + current_list_name + "] (" + str(count) + " passwords)"
+    else:
+        list_str = ""
     # Build the length part of the status line.
     # Use "[not set]" when length is None, otherwise the number in brackets.
     if length is None:
@@ -280,23 +682,25 @@ def format_settings_line(length, types_set):
         types_str = "[set]"
     else:
         types_str = "[not set]"
-    return "Settings: Length = " + length_str + " | Types = " + types_str + \
-    "\n" + "MUST SET LENGTH AND CHARACTER TYPES FIRST!" + "\n"
+    line = ""
+    if list_str != "":
+        line = list_str + " | "
+    line = line + "Length = " + length_str + " | Types = " + types_str
+    line = line + "\n" + "MUST SET LENGTH AND CHARACTER TYPES FIRST!" + "\n"
+    return line
 
 
 # run_main_menu: Shows the main menu and returns the user's choice.
-# Prerequisites: length and types_set reflect current settings.
-# Arguments: length (int or None), types_set (bool).
-# Returns: str, one of "1", "2", "3", "4", "5".
-def run_main_menu(length, types_set):
+# Prerequisites: None.
+# Arguments: None.
+# Returns: str, one of "1", "2", "3", "4".
+def run_main_menu():
     print()
-    print(format_settings_line(length, types_set))
     print("Menu")
-    print("1) Generate password")
-    print("2) Edit password settings")
+    print("1) Generate passwords")
+    print("2) Password lists")
     print("3) I need help!")
-    print("4) Export saved passwords to CSV")
-    print("5) Exit program")
+    print("4) Exit program")
     choice = input("\nEnter choice: ").strip()
     return choice
 
@@ -470,48 +874,68 @@ def generate_password(length, use_lower, use_upper, use_digit, use_symbol):
     return "".join(random.choices(pool, k=length))
 
 
-# run_generate_screen: Shows the Generate Password / Show Result screen until user returns to menu or exits.
-# Prerequisites: length and types_set are set; at least one character type is on.
-# Arguments: length, types_set, the four use_* flags, and saved_passwords list.
-# Returns: None (returns to main menu via loop in main).
-def run_generate_screen(length, types_set, use_lower, use_upper, use_digit, use_symbol, saved_passwords):
-    # Each time through the loop: one password and the three options are shown.
-    # Exit only when 2 (return to main menu) or 3 (exit program) is chosen.
-    # Option 1 means loop again and show another password.
+# run_generate_flow: Walks the user through naming a list (first time), setting length and character types
+#                    (first time), and then generating passwords. Includes an Edit settings option.
+# Prerequisites: all_lists is a dict; the other arguments are the current state from main().
+# Arguments: all_lists (dict), current_list_name (str), length (int or None), types_set (bool),
+#            use_lower, use_upper, use_digit, use_symbol (bool).
+# Returns: tuple (current_list_name, length, types_set, use_lower, use_upper, use_digit, use_symbol).
+def run_generate_flow(all_lists, current_list_name, length, types_set, use_lower, use_upper, use_digit, use_symbol):
+    # Step 1: if no active list exists yet, force the user to name one.
+    if current_list_name == "":
+        print()
+        print("Before generating passwords, you need to name a password list.")
+        print("All generated passwords will be saved into this list.")
+        current_list_name = run_name_list_screen(all_lists)
+        all_lists[current_list_name] = []
+        print("\nList '" + current_list_name + "' created!")
+
+    # Step 2: if length has not been set yet, force the user to set it.
+    # Loop until do_set_length returns an actual number (not None).
+    if length is None:
+        print()
+        print("Next, set the password length. You must set this before generating.")
+        while length is None:
+            length = do_set_length(length)
+            if length is None:
+                print("\nYou must set a length before generating passwords. Please try again.")
+
+    # Step 3: if character types have not been set yet, force the user to choose them.
+    if not types_set:
+        print()
+        print("Now, choose which character types to include in your passwords.")
+        use_lower, use_upper, use_digit, use_symbol = do_character_types(
+            use_lower, use_upper, use_digit, use_symbol
+        )
+        types_set = True
+
+    # Step 4: generate passwords in a loop until the user returns to menu.
     while True:
         print()
-        print(format_settings_line(length, types_set))
+        print(format_settings_line(length, types_set, current_list_name, all_lists))
         print("Generated password:")
         pwd = generate_password(length, use_lower, use_upper, use_digit, use_symbol)
         print(pwd)
 
-        # Save this password to the list so the user can export later.
-        save_generated_password(saved_passwords, pwd, length, use_lower, use_upper, use_digit, use_symbol)
+        # Save this password to the current list.
+        save_generated_password(all_lists[current_list_name], pwd, length, use_lower, use_upper, use_digit, use_symbol)
 
         print("1) Generate new password")
-        print("2) Return to menu")
-        print("3) Exit program")
+        print("2) Edit settings")
+        print("3) Return to menu")
         choice = input("\nEnter choice: ").strip()
 
-        # Choice 1: continue the loop and show another password.
-        # Choice 2: return so control goes back to main and the main menu appears.
-        # Choice 3: exit the program.
+        # Choice 1: loop again and show another password.
+        # Choice 2: open the settings submenu, then come back to generating.
+        # Choice 3: return all updated state to main().
         if choice == "1":
             continue
-        if choice == "2":
-            return
-        if choice == "3":
-            exit_program()
-
-
-# show_settings_required_message: Displays a message that length and character types must be set first, then waits for Enter.
-# Prerequisites: None.
-# Arguments: None.
-# Returns: None.
-def show_settings_required_message():
-    print()
-    print("Set length and character types first in Edit password settings.")
-    input("\nPress Enter to return to menu: ")
+        elif choice == "2":
+            length, types_set, use_lower, use_upper, use_digit, use_symbol = run_settings(
+                length, types_set, use_lower, use_upper, use_digit, use_symbol
+            )
+        elif choice == "3":
+            return current_list_name, length, types_set, use_lower, use_upper, use_digit, use_symbol
 
 
 # run_help_menu: Displays the help menu and runs the selected item (quickstart, length help, character types help) or return to menu or exit.
@@ -602,8 +1026,9 @@ def exit_program():
     raise SystemExit(0)
 
 
-# main: Entry point; shows the welcome once, then runs the main menu loop (generate, settings, help, export, exit).
-# Keeps track of length, types_set, the four character-type flags, and saved passwords for exporting.
+# main: Entry point; shows the welcome once, then runs the main menu loop (generate, lists, help, exit).
+# Keeps track of all_lists (dict of named password lists), current_list_name, length, types_set,
+# the four character-type flags, and the session token.
 # Prerequisites: None.
 # Arguments: None.
 # Returns: None (runs until exit).
@@ -623,23 +1048,28 @@ def main():
         print("\nSession token service error. Make sure the session token microservice is running.\n")
         exit_program()
 
-    # saved_passwords stores every generated password record so the user can export later.
-    saved_passwords = []
+    # user_id identifies this user for the data backup microservice.
+    user_id = "password-generator-user"
 
-    # length is None and types_set is False so the status line shows "not set"
-    # until the settings menu is used. The four flags default to lower/upper/digits on
-    # and symbols off so the first generation uses letters and numbers unless changed.
+    # all_lists maps each list name to its list of password dicts.
+    # current_list_name starts empty; the user will be prompted to name a list
+    # the first time they choose "Generate passwords".
+    all_lists = {}
+    current_list_name = ""
+
+    # length is None and types_set is False until the user goes through the generate flow.
+    # The four flags default to lower/upper/digits on and symbols off.
     length = None
     types_set = False
     use_lower = True
     use_upper = True
     use_digit = True
-    use_symbol = False
+    use_symbol = True
 
     # Show the main menu, get the choice, then branch.
-    # The loop runs until option 5 is chosen and exit_program() is called.
+    # The loop runs until option 4 is chosen and exit_program() is called.
     while True:
-        choice = run_main_menu(length, types_set)
+        choice = run_main_menu()
 
         # Before doing anything, validate the session token.
         # If it has expired or is invalid, force the user to log in again.
@@ -662,22 +1092,17 @@ def main():
             print("\nSession token service error. Make sure the session token microservice is running.\n")
             exit_program()
 
-        # Choice 1: generate password only when length and types are set;
-        # otherwise show the "set length and character types first" message.
-        # Choice 2: open settings and update length, types_set, and the four flags.
+        # Choice 1: run the generate flow (handles naming a list and settings on first use).
+        # Choice 2: open the password lists submenu (create, switch, backup, find & restore, export).
         # Choice 3: show help menu.
-        # Choice 4: export saved passwords to a CSV file using the export microservice.
-        # Choice 5: exit.
+        # Choice 4: exit.
         if choice == "1":
-            # Generate was chosen but nothing is set yet: show the reminder and wait for Enter.
-            # Otherwise run the generate screen with the current settings.
-            if length is None or not types_set:
-                show_settings_required_message()
-            else:
-                run_generate_screen(length, types_set, use_lower, use_upper, use_digit, use_symbol, saved_passwords)
+            current_list_name, length, types_set, use_lower, use_upper, use_digit, use_symbol = run_generate_flow(
+                all_lists, current_list_name, length, types_set, use_lower, use_upper, use_digit, use_symbol
+            )
         elif choice == "2":
-            length, types_set, use_lower, use_upper, use_digit, use_symbol = run_settings(
-                length, types_set, use_lower, use_upper, use_digit, use_symbol
+            current_list_name, length, types_set, use_lower, use_upper, use_digit, use_symbol = run_password_lists_screen(
+                all_lists, current_list_name, user_id, length, types_set, use_lower, use_upper, use_digit, use_symbol
             )
         elif choice == "3":
             help_result = run_help_menu(session_token)
@@ -692,8 +1117,6 @@ def main():
                     exit_program()
                 continue
         elif choice == "4":
-            run_export_screen(saved_passwords)
-        elif choice == "5":
             exit_program()
 
 
