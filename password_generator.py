@@ -1,13 +1,9 @@
 # Password Generator - A terminal application for generating secure, random passwords with custom settings.
 # Includes:
 # - Login microservice
-# - Export microservice
 # - Session token microservice
 # - Data backup microservice
-# - Searching microservice
 
-import json
-import os
 import random
 import string
 import requests
@@ -41,24 +37,6 @@ def attempt_login(username, password):
     return data.get("status", "service_error")
 
 
-# attempt_create_account: Sends username/password to the login microservice's create-account endpoint.
-# Prerequisites: login microservice is running on localhost:5001.
-# Arguments: username (str), password (str).
-# Returns: str, one of "created", "user_exists", "invalid_format", or "service_error".
-def attempt_create_account(username, password):
-    CREATE_URL = "http://127.0.0.1:5000/create-account"
-    payload = {"username": username, "password": password}
-    try:
-        resp = requests.post(CREATE_URL, json=payload, timeout=3)
-    except:
-        return "service_error"
-    try:
-        data = resp.json()
-    except:
-        return "service_error"
-    return data.get("status", "service_error")
-
-
 # create_session_token: Asks the session token microservice to issue a new token after a successful login.
 # Prerequisites: session token microservice is running on SESSION_URL.
 # Arguments: None.
@@ -87,6 +65,59 @@ def create_session_token():
     return None
 
 
+# create_password_backup: Sends saved passwords to the data backup microservice to create a backup.
+# Prerequisites: data backup microservice is running on BACKUP_URL.
+# Arguments: saved_passwords (list of dict), user_id (str), list_name (str).
+# Returns: dict response JSON on success, or None if the service cannot be reached.
+def create_password_backup(saved_passwords, user_id, list_name):
+    BACKUP_URL = "http://127.0.0.1:8080/backup/create"
+
+    # Build the JSON payload exactly how the backup microservice expects it.
+    # Wrap the passwords with the list name so the backup file shows which list this is.
+    headers = {"Content-Type": "application/json", "X-API-Key": "dev-secret-key"}
+    backup_data = {
+        "list_name": list_name,
+        "passwords": saved_passwords
+    }
+    payload = {
+        "user_id": user_id,
+        "source_app": "PasswordGenerator",
+        "data": backup_data
+    }
+
+    # Try to send the POST request to the backup microservice.
+    # If the service is not running, this will throw an exception.
+    try:
+        resp = requests.post(BACKUP_URL, headers=headers, json=payload, timeout=5)
+    except:
+        return None
+
+    # Try to parse JSON response.
+    # If it is not JSON for some reason, treat it as a service error.
+    try:
+        return resp.json()
+    except:
+        return None
+
+
+# attempt_create_account: Sends username/password to the login microservice's create-account endpoint.
+# Prerequisites: login microservice is running on localhost:5001.
+# Arguments: username (str), password (str).
+# Returns: str, one of "created", "user_exists", "invalid_format", or "service_error".
+def attempt_create_account(username, password):
+    CREATE_URL = "http://127.0.0.1:5000/create-account"
+    payload = {"username": username, "password": password}
+    try:
+        resp = requests.post(CREATE_URL, json=payload, timeout=3)
+    except:
+        return "service_error"
+    try:
+        data = resp.json()
+    except:
+        return "service_error"
+    return data.get("status", "service_error")
+
+
 # validate_session_token: Sends a token to the session token microservice and returns whether it is still valid.
 # Prerequisites: session token microservice is running on SESSION_URL.
 # Arguments: token (str).
@@ -113,6 +144,60 @@ def validate_session_token(token):
 
     # Return the status field from the microservice response.
     return data.get("status", "service_error")
+
+
+# export_saved_passwords: Sends saved records to the export microservice and returns its response.
+# Prerequisites: export microservice is running on EXPORT_URL.
+# Arguments: saved_passwords (list of dict), filename (str).
+# Returns: dict response JSON on success, or None if the service cannot be reached.
+def export_saved_passwords(saved_passwords, filename):
+    EXPORT_URL = "http://127.0.0.1:5002/export"
+
+    # Build the JSON payload exactly how the export microservice expects it.
+    payload = {"filename": filename, "data": saved_passwords}
+
+    # Try to send the POST request to the export microservice.
+    # If the service is not running, this will throw an exception.
+    try:
+        resp = requests.post(EXPORT_URL, json=payload, timeout=5)
+    except:
+        return None
+
+    # Try to parse JSON response.
+    # If it is not JSON for some reason, treat it as a service error.
+    try:
+        return resp.json()
+    except:
+        return None
+
+
+# restore_password_backup: Restores a specific backup by ID from the data backup microservice.
+# Prerequisites: data backup microservice is running on BACKUP_URL.
+# Arguments: user_id (str), backup_id (str).
+# Returns: dict response JSON on success, or None if the service cannot be reached.
+def restore_password_backup(user_id, backup_id):
+    BACKUP_URL = "http://127.0.0.1:8080/backup/restore"
+
+    # Build the JSON payload exactly how the backup microservice expects it.
+    headers = {"Content-Type": "application/json", "X-API-Key": "dev-secret-key"}
+    payload = {
+        "user_id": user_id,
+        "backup_id": backup_id
+    }
+
+    # Try to send the POST request to the backup microservice.
+    # If the service is not running, this will throw an exception.
+    try:
+        resp = requests.post(BACKUP_URL, headers=headers, json=payload, timeout=5)
+    except:
+        return None
+
+    # Try to parse JSON response.
+    # If it is not JSON for some reason, treat it as a service error.
+    try:
+        return resp.json()
+    except:
+        return None
 
 
 # run_login_screen: Prompts the user to log in until success or they quit.
@@ -188,156 +273,6 @@ def save_generated_password(saved_passwords, password, length, use_lower, use_up
     record["numbers"] = use_digit
     record["symbols"] = use_symbol
     saved_passwords.append(record)
-
-
-# export_saved_passwords: Sends saved records to the export microservice and returns its response.
-# Prerequisites: export microservice is running on EXPORT_URL.
-# Arguments: saved_passwords (list of dict), filename (str).
-# Returns: dict response JSON on success, or None if the service cannot be reached.
-def export_saved_passwords(saved_passwords, filename):
-    EXPORT_URL = "http://127.0.0.1:5002/export"
-
-    # Build the JSON payload exactly how the export microservice expects it.
-    payload = {"filename": filename, "data": saved_passwords}
-
-    # Try to send the POST request to the export microservice.
-    # If the service is not running, this will throw an exception.
-    try:
-        resp = requests.post(EXPORT_URL, json=payload, timeout=5)
-    except:
-        return None
-
-    # Try to parse JSON response.
-    # If it is not JSON for some reason, treat it as a service error.
-    try:
-        return resp.json()
-    except:
-        return None
-
-
-# create_password_backup: Sends saved passwords to the data backup microservice to create a backup.
-# Prerequisites: data backup microservice is running on BACKUP_URL.
-# Arguments: saved_passwords (list of dict), user_id (str), list_name (str).
-# Returns: dict response JSON on success, or None if the service cannot be reached.
-def create_password_backup(saved_passwords, user_id, list_name):
-    BACKUP_URL = "http://127.0.0.1:8080/backup/create"
-
-    # Build the JSON payload exactly how the backup microservice expects it.
-    # Wrap the passwords with the list name so the backup file shows which list this is.
-    headers = {"Content-Type": "application/json", "X-API-Key": "dev-secret-key"}
-    backup_data = {
-        "list_name": list_name,
-        "passwords": saved_passwords
-    }
-    payload = {
-        "user_id": user_id,
-        "source_app": "PasswordGenerator",
-        "data": backup_data
-    }
-
-    # Try to send the POST request to the backup microservice.
-    # If the service is not running, this will throw an exception.
-    try:
-        resp = requests.post(BACKUP_URL, headers=headers, json=payload, timeout=5)
-    except:
-        return None
-
-    # Try to parse JSON response.
-    # If it is not JSON for some reason, treat it as a service error.
-    try:
-        return resp.json()
-    except:
-        return None
-
-
-# restore_password_backup: Restores a specific backup by ID from the data backup microservice.
-# Prerequisites: data backup microservice is running on BACKUP_URL.
-# Arguments: user_id (str), backup_id (str).
-# Returns: dict response JSON on success, or None if the service cannot be reached.
-def restore_password_backup(user_id, backup_id):
-    BACKUP_URL = "http://127.0.0.1:8080/backup/restore"
-
-    # Build the JSON payload exactly how the backup microservice expects it.
-    headers = {"Content-Type": "application/json", "X-API-Key": "dev-secret-key"}
-    payload = {
-        "user_id": user_id,
-        "backup_id": backup_id
-    }
-
-    # Try to send the POST request to the backup microservice.
-    # If the service is not running, this will throw an exception.
-    try:
-        resp = requests.post(BACKUP_URL, headers=headers, json=payload, timeout=5)
-    except:
-        return None
-
-    # Try to parse JSON response.
-    # If it is not JSON for some reason, treat it as a service error.
-    try:
-        return resp.json()
-    except:
-        return None
-
-
-# INDEX_FILE_PATH is the full path to the local JSON file that maps list names to backup IDs.
-# It is stored next to this script so it persists across sessions.
-INDEX_FILE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "password_lists_index.json")
-
-
-# save_backup_index: Saves a list name and its backup ID to the local index file.
-# Prerequisites: None.
-# Arguments: list_name (str), backup_id (str).
-# Returns: None.
-def save_backup_index(list_name, backup_id):
-    # Try to load the existing index from the JSON file.
-    # If the file does not exist or is not valid JSON, start with an empty dict.
-    index = {}
-    try:
-        file = open(INDEX_FILE_PATH, "r")
-        index = json.load(file)
-        file.close()
-    except:
-        index = {}
-
-    # Add or update the entry for this list name.
-    index[list_name] = backup_id
-
-    # Write the updated index back to the file.
-    file = open(INDEX_FILE_PATH, "w")
-    file.write(json.dumps(index, indent=2))
-    file.close()
-
-
-# search_for_list: Uses the searching microservice to look up a list name in the local index file.
-# Prerequisites: searching microservice is running on SEARCH_URL.
-# Arguments: list_name (str).
-# Returns: dict response JSON on success (e.g. {"MyList": "backup-id-here"}), or None if the service
-#          cannot be reached or the index file does not exist.
-def search_for_list(list_name):
-    SEARCH_URL = "http://127.0.0.1:8001/search"
-
-    # Build the JSON payload for a file lookup search.
-    # The searching microservice will open the index file and look up the list name as a JSON key.
-    payload = {
-        "data_source": INDEX_FILE_PATH,
-        "query": list_name,
-        "file_lookup": True,
-        "strict": False
-    }
-
-    # Try to send the POST request to the searching microservice.
-    # If the service is not running, this will throw an exception.
-    try:
-        resp = requests.post(SEARCH_URL, json=payload, timeout=5)
-    except:
-        return None
-
-    # Try to parse JSON response.
-    # If it is not JSON for some reason, treat it as a service error.
-    try:
-        return resp.json()
-    except:
-        return None
 
 
 # run_export_screen: Prompts the user for a filename and exports saved passwords using the microservice.
@@ -425,7 +360,7 @@ def run_password_lists_screen(all_lists, current_list_name, user_id, length, typ
         print("\n1) View passwords in current list")
         print("2) Create or switch list")
         print("3) Backup or export current list")
-        print("4) Find & restore a list")
+        print("4) Restore a list by backup ID")
         print("5) Return to menu")
         choice = input("\nEnter choice: ").strip()
 
@@ -539,7 +474,7 @@ def run_password_lists_screen(all_lists, current_list_name, user_id, length, typ
                 continue
 
             print("Save list '" + current_list_name + "' (" + str(len(current_passwords)) + " passwords)")
-            print("\n1) Backup to cloud (can be restored later by name)")
+            print("\n1) Backup to cloud (save the backup ID to restore later)")
             print("2) Export to CSV file")
             print("3) Cancel")
             save_choice = input("\nEnter choice: ").strip()
@@ -553,14 +488,13 @@ def run_password_lists_screen(all_lists, current_list_name, user_id, length, typ
                     input("\nPress Enter to continue: ")
                     continue
 
-                if result.get("status") == "success":
-                    backup_info = result.get("backup", {})
-                    backup_id = backup_info.get("backup_id", "")
-                    save_backup_index(current_list_name, backup_id)
+                # Backup service may return {"status": "success", "backup": {...}} or the backup object directly with "backup_id" at top level.
+                backup_id = result.get("backup_id") or result.get("backup", {}).get("backup_id", "")
+                if result.get("status") == "success" or (backup_id and result.get("data")):
                     print("\nBackup created successfully!")
                     print("List name: " + current_list_name)
                     print("Backup ID: " + backup_id)
-                    print("\nYou can restore this list later by searching for '" + current_list_name + "'.")
+                    print("\nSave this backup ID to restore later: " + backup_id)
                 else:
                     print("\nBackup failed: " + result.get("error", "Unknown error."))
 
@@ -569,40 +503,16 @@ def run_password_lists_screen(all_lists, current_list_name, user_id, length, typ
             elif save_choice == "2":
                 run_export_screen(current_passwords)
 
-        # Choice 4: find a previously backed-up list by name using the search microservice, then restore it.
+        # Choice 4: restore a previously backed-up list by backup ID.
         elif choice == "4":
             print()
-            print("Find & Restore a List")
-            print("Type the exact name of a password list that was previously backed up.")
-            list_name = input("\nEnter list name (or press Enter to cancel): ").strip()
-
-            if list_name == "":
+            print("Restore a List by Backup ID")
+            print("Enter the backup ID to restore (e.g. 198084f4-6cd9-47d1-976c-ec5fd1f143c0).")
+            backup_id = input("\nEnter backup ID (or press Enter to cancel): ").strip()
+            if backup_id == "":
                 continue
 
-            # Check if the index file exists before trying to search.
-            if not os.path.exists(INDEX_FILE_PATH):
-                print("\nNo backup found with the name '" + list_name + "'.")
-                input("\nPress Enter to continue: ")
-                continue
-
-            # Use the search microservice to look up the backup ID for this list name.
-            print("\nSearching for '" + list_name + "'...")
-            result = search_for_list(list_name)
-
-            if result is None:
-                print("\nSearch service error. Make sure the searching microservice is running.")
-                input("\nPress Enter to continue: ")
-                continue
-
-            # The search microservice returns {list_name: backup_id} on success, or {list_name: null} if not found.
-            backup_id = result.get(list_name)
-
-            if backup_id is None:
-                print("\nNo backup found with the name '" + list_name + "'.")
-                input("\nPress Enter to continue: ")
-                continue
-
-            print("Found it! Restoring list '" + list_name + "'...")
+            print("\nRestoring backup...")
             restore_result = restore_password_backup(user_id, backup_id)
 
             if restore_result is None:
@@ -610,14 +520,16 @@ def run_password_lists_screen(all_lists, current_list_name, user_id, length, typ
                 input("\nPress Enter to continue: ")
                 continue
 
-            if restore_result.get("status") == "success":
-                restored_data = restore_result.get("data", {})
+            # Backup service may return {"status": "success", "data": {...}} or the backup object directly with "data" containing list_name and passwords.
+            restored_data = restore_result.get("data", {})
+            if restore_result.get("status") == "success" or (restored_data and "passwords" in restored_data):
                 # The backup data is wrapped in a dict with "list_name" and "passwords" keys.
                 # Pull the passwords list out of the wrapper.
                 if "passwords" in restored_data:
                     password_list = restored_data["passwords"]
                 else:
                     password_list = restored_data
+                list_name = restored_data.get("list_name", "RestoredList")
                 all_lists[list_name] = password_list
                 current_list_name = list_name
 
@@ -1093,7 +1005,7 @@ def main():
             exit_program()
 
         # Choice 1: run the generate flow (handles naming a list and settings on first use).
-        # Choice 2: open the password lists submenu (create, switch, backup, find & restore, export).
+        # Choice 2: open the password lists submenu (create, switch, backup, restore by ID, export).
         # Choice 3: show help menu.
         # Choice 4: exit.
         if choice == "1":
